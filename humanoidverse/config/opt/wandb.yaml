@@ -1,6 +1,6 @@
 # @package _global_
 
-use_wandb: True
+use_wandb: False
 
 wandb:
   wandb_project: null

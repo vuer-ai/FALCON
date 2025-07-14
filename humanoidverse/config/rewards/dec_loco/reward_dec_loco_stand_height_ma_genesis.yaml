@@ -1,0 +1,257 @@
+# @package _global_
+
+# defaults:
+#   - reward_base
+
+rewards:
+  set_reward: Yuanhang
+  set_reward_date: 20250405
+  only_positive_rewards: False
+  reward_scales:
+      tracking_lin_vel_x: 2.0
+      tracking_lin_vel_y: 1.5
+      tracking_ang_vel: 4.0
+      tracking_walk_base_height: 1.0
+      tracking_stance_base_height: 4.0 # 1.0
+      # tracking_waist_dofs: 0.5
+      tracking_waist_dofs_tapping: 0.5
+      tracking_waist_dofs_stance: 3.0
+      # tracking_arm_dofs: 0.5
+      penalty_lin_vel_z: -2.0
+      penalty_ang_vel_xy: -0.05 # -0.5
+      penalty_orientation: -1.5 # -1.0
+      penalty_torso_orientation: -1.0 # -1.0
+      penalty_lower_body_torques: -1e-5 #-0.00001
+      penalty_lower_body_dof_vel: -1.0e-3
+      penalty_lower_body_dof_acc: -2.5e-7
+      penalty_lower_body_action_rate: -0.1 # -0.5
+      # penalty_feet_contact_forces: -0.01
+      # penalty_stumble: -10.0
+      # penalty_slippage: -1.0
+      penalty_contact_no_vel: -0.2 # -0.2
+      penalty_feet_ori: -2.0
+      limits_lower_body_dof_pos: -5.0
+      # limits_lower_body_dof_vel: -5.0
+      # limits_lower_body_torque: -0.1
+      feet_air_time: 4.0
+      base_height: -10.0
+      termination: -250.0 # -500.0
+      penalty_feet_height: -5.0
+      penalty_feet_swing_height: -20.0
+      feet_heading_alignment: -0.25
+      penalty_close_feet_xy: -10.
+      # penalty_close_knees_xy: -2.
+      penalty_hip_pos: -2.5 # -5.0
+      penalty_ang_vel_xy_torso: -1.0 # -0.75
+      penalty_stance_dof: -1.0e-3 # -1.0e-3
+      # penalty_stance_feet: -2.5
+      penalty_stance_tap_feet: -5.0
+      penalty_stance_root: -5.0
+      # contact: 0.18 # 0.18
+      # alive: 1.0 # 0.15
+      # penalty_waist_dofs: -0.5
+      # penalty_upper_body_dofs_freeze: -0.4 
+      penalty_stand_still: -0.15
+      penalty_stance_symmetry: -0.5
+      # penalty_stance_contact_no_ang_vel: -0.1
+      penalty_ankle_roll: -2.0
+      # penalty_stance_feet_vel: -1.0e-2
+      penalty_contact: -4.0
+      penalty_negative_knee_joint: -1.0
+      # penalty_torso_roll_orientation: -2.5
+      penalty_diff_feet_air_time: -5.0
+      feet_max_height_for_this_air: -0.0
+      penalty_shift_in_zero_command: -1.0
+      penalty_ang_shift_in_zero_command: -1.0
+      # penalty_root_acc_lower_body: -1e-4
+
+      # tracking_arm_dofs: 0.5
+      tracking_upper_body_dofs: 4.0
+      penalty_upper_body_torques: -1e-5 #-0.00001
+      penalty_upper_body_dof_vel: -1.0e-3
+      penalty_upper_body_dof_acc: -2.5e-7
+      penalty_upper_body_action_rate: -0.1 # -0.5
+      limits_upper_body_dof_pos: -5.0
+      penalty_ee_lin_acc: -1e-1
+      penalty_ee_ang_acc: -1e-2
+      # penalty_root_acc_upper_body: -1e-4
+      limits_upper_body_dof_vel: -5.0
+      limits_upper_body_torque: -0.1
+  reward_groups:
+    lower_body: [
+      "tracking_lin_vel_x",
+      "tracking_lin_vel_y",
+      "tracking_ang_vel",
+      # "tracking_waist_dofs",
+      "tracking_waist_dofs_tapping",
+      "tracking_waist_dofs_stance",
+      "tracking_walk_base_height",
+      "tracking_stance_base_height",
+      "penalty_lin_vel_z",
+      "penalty_ang_vel_xy",
+      "penalty_orientation",
+      "penalty_lower_body_torques",
+      "penalty_lower_body_dof_vel",
+      "penalty_lower_body_dof_acc",
+      "penalty_lower_body_action_rate",
+      "penalty_contact_no_vel",
+      "penalty_feet_ori",
+      "limits_lower_body_dof_pos",
+      # "limits_lower_body_dof_vel",
+      # "limits_lower_body_torque",
+      "feet_air_time",
+      "penalty_diff_feet_air_time",
+      "base_height",
+      "termination",
+      "penalty_feet_height",
+      "penalty_feet_swing_height",
+      # "penalty_feet_contact_forces",
+      "feet_heading_alignment",
+      "penalty_close_feet_xy",
+      "penalty_hip_pos",
+      "penalty_ang_vel_xy_torso",
+      "penalty_stance_dof",
+      "penalty_stance_tap_feet",
+      "penalty_stance_root",
+      "penalty_stand_still",
+      "penalty_stance_symmetry",
+      "penalty_ankle_roll",
+      "penalty_contact",
+      "penalty_negative_knee_joint",
+      "penalty_torso_orientation",
+      "feet_max_height_for_this_air",
+      # "alive",
+      "penalty_shift_in_zero_command",
+      "penalty_ang_shift_in_zero_command",
+      # "penalty_root_acc_lower_body",
+      # "penalty_stance_contact_no_ang_vel"
+      ]
+    upper_body: [
+      "tracking_upper_body_dofs",
+      "penalty_upper_body_torques",
+      "penalty_upper_body_dof_vel",
+      "penalty_upper_body_dof_acc",
+      "penalty_upper_body_action_rate",
+      "limits_upper_body_dof_pos",
+      "limits_upper_body_dof_vel",
+      "limits_upper_body_torque",
+      "penalty_ee_lin_acc",
+      "penalty_ee_ang_acc",
+      # "penalty_root_acc_upper_body",
+      ]
+  
+  reward_weights:
+    lower_body: 1.0
+    upper_body: 1.0
+  
+  # fix upper body
+  fix_upper_body: False
+  # gait period
+  gait_period: 1.0
+
+  reward_tracking_sigma:
+    lin_vel: 0.25
+    ang_vel: 0.25
+    base_height: 0.05
+    waist_dofs: 0.05
+    arm_dofs: 0.1
+    upper_body_dofs: 0.1 # 0.1
+  reward_limit:
+    soft_dof_pos_limit: 0.95
+    soft_dof_vel_limit: 0.95
+    soft_torque_limit: 0.95
+  
+  close_knees_threshold: 0.16
+  close_feet_threshold: 0.17
+  locomotion_max_contact_force: 300.0
+
+  # Unitree G1
+  feet_height_target: 0.12
+  feet_height_stand: 0.025
+  desired_feet_max_height_for_this_air: 0.12
+  desired_base_height: 0.75 # 0.728
+  # Booster T1
+  # feet_height_target: 0.08
+  # feet_height_stand: 0.020
+  # desired_feet_max_height_for_this_air: 0.08
+  # desired_base_height: 0.62 # 0.728
+
+  stance_base_height_penalty_scale: 5.0
+
+  reward_penalty_curriculum: True
+  reward_initial_penalty_scale : 0.5
+  reward_min_penalty_scale: 0.0
+  reward_max_penalty_scale: 1.0
+  reward_penalty_level_down_threshold: 40 # 150 40 20
+  reward_penalty_level_up_threshold: 210 # 850 230 90
+  reward_penalty_degree: 0.00001
+  num_compute_average_epl: 10000
+
+  upper_body_motion_scale_curriculum: False
+  upper_body_motion_initial_scale: 0.0
+  upper_body_motion_scale_up_threshold: 210
+  upper_body_motion_scale_down_threshold: 200
+  upper_body_motion_scale_up: 0.05
+  upper_body_motion_scale_down: 0.01
+  upper_body_motion_scale_max: 1.0
+  upper_body_motion_scale_min: 0.0
+
+  command_height_scale_curriculum: True
+  command_height_scale_initial_scale: 0.1
+  command_height_scale_up_threshold: 210
+  command_height_scale_down_threshold: 200
+  command_height_scale_up: 0.02
+  command_height_scale_down: 0.01
+  command_height_scale_degree: 0.00005
+  command_height_scale_max: 1.0
+  command_height_scale_min: 0.0
+
+  force_scale_curriculum: True
+  force_scale_initial_scale: 0.1
+  force_scale_up_threshold: 210
+  force_scale_down_threshold: 200
+  force_scale_up: 0.02
+  force_scale_down: 0.02
+  force_scale_degree: 0.00005
+  force_scale_max: 1.0
+  force_scale_min: 0.0
+
+  upper_body_tracking_sigma_curriculum: False
+  upper_body_tracking_sigma_initial_scale: 1.0
+  upper_body_tracking_sigma_scale_up_threshold: 0.45
+  upper_body_tracking_sigma_scale_down_threshold: 0.5
+  upper_body_tracking_sigma_scale_up: 0.02
+  upper_body_tracking_sigma_scale_down: 0.02
+  upper_body_tracking_sigma_max: 1.0
+  upper_body_tracking_sigma_min: 0.1
+
+  reward_penalty_reward_names: [
+    "penalty_upper_body_torques",
+    "penalty_upper_body_dof_acc",
+    "penalty_upper_body_dof_vel",
+    "penalty_upper_body_action_rate",
+    "penalty_lower_body_torques",
+    "penalty_lower_body_dof_acc",
+    "penalty_lower_body_dof_vel",
+    "penalty_lower_body_action_rate",
+    "limits_upper_body_dof_pos",
+    "limits_upper_body_dof_vel",
+    "limits_upper_body_torque",
+    "limits_lower_body_dof_pos",
+    "limits_lower_body_dof_vel",
+    "limits_lower_body_torque",
+    # "penalty_stance_contact_no_ang_vel",
+    # "penalty_feet_ori",
+    # "feet_heading_alignment",
+    # "penalty_ang_vel_xy_torso",
+    # "penalty_torso_roll_orientation",
+    # "penalty_stance_dof",
+    # "penalty_stance_tap_feet",
+    # "penalty_stance_root",
+    # "penalty_stance_symmetry",
+    # "penalty_shift_in_zero_command",
+    # "penalty_ang_shift_in_zero_command",
+    # "penalty_ee_lin_acc",
+    # "penalty_ee_ang_acc",
+  ]
+

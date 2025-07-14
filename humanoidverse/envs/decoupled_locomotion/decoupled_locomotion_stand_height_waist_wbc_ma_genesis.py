@@ -1,5 +1,6 @@
 import numpy as np
 # from isaacgym.torch_utils import *
+import trimesh
 
 import torch
 from isaac_utils.rotations import get_euler_xyz_in_tensor
@@ -32,6 +33,15 @@ class LeggedRobotDecoupledLocomotionStanceHeightWBC(LeggedRobotDecoupledLocomoti
         self.init_done = False
         super().__init__(config, device)
         self.command_height_scale = torch.zeros(self.num_envs, 1, dtype=torch.float, device=self.device)
+
+        # added from FALCON Isaac Gym task implementation
+        self.left_ankle_dof_indices = [self.dof_names.index(dof) for dof in self.config.robot.left_ankle_dof_names]
+        self.right_ankle_dof_indices = [self.dof_names.index(dof) for dof in self.config.robot.right_ankle_dof_names]
+
+        self.left_hand_link = config.robot.force_control.left_hand_link
+        self.right_hand_link = config.robot.force_control.right_hand_link
+        self.left_hand_link_index = self.body_names.index(self.left_hand_link)
+        self.right_hand_link_index = self.body_names.index(self.right_hand_link)
 
     def _init_tracking_config(self):
         if "motion_tracking_link" in self.config.robot.motion:
@@ -460,7 +470,15 @@ class LeggedRobotDecoupledLocomotionStanceHeightWBC(LeggedRobotDecoupledLocomoti
         # Tracking of linear velocity y commands
         lin_vel_y_error = torch.square(self.commands[:, 1] - self.base_lin_vel[:, 1])
         return torch.exp(-lin_vel_y_error/self.config.rewards.reward_tracking_sigma.lin_vel)
-    
+
+    # added from FALCON Isaac Gym task implementation
+    def _reward_penalty_ankle_roll(self):
+        # Compute the penalty for ankle roll
+        left_ankle_roll = self.simulator.dof_pos[:, self.left_ankle_dof_indices[1:2]]
+        right_ankle_roll = self.simulator.dof_pos[:, self.right_ankle_dof_indices[1:2]]
+        return torch.sum(torch.abs(left_ankle_roll) + torch.abs(right_ankle_roll),
+                         dim=1)  # * (1 - self.commands[:, 4]) # only apply the ankle roll penalty if stance
+
     ######################## LIMITS REWARDS #########################
     def _reward_limits_lower_body_dof_pos(self):
         # Penalize dof positions too close to the limit (lower body only)
@@ -586,6 +604,36 @@ class LeggedRobotDecoupledLocomotionStanceHeightWBC(LeggedRobotDecoupledLocomoti
         if self.waist_pitch_dof_indice:
             waist_dofs_error += torch.square(self.simulator.dof_pos[:, self.waist_pitch_dof_indice] - self.commands[:, 7])
         return torch.exp(-waist_dofs_error/self.config.rewards.reward_tracking_sigma.waist_dofs) * self.commands[:, 4]
+
+    # added from FALCON Isaac Gym task implementation
+    def _reward_tracking_walk_base_height(self):
+        base_h_err = torch.abs(self.commands[:, 8] - self.simulator.robot_root_states[:, 2])
+        return torch.exp(-base_h_err / self.config.rewards.reward_tracking_sigma.base_height) * self.commands[:, 4]
+
+    # added from FALCON Isaac Gym task implementation
+    def _reward_tracking_stance_base_height(self):
+        # Tracking of base height commands (z axe)
+        base_height_error = torch.abs(self.commands[:, 8] - self.simulator.robot_root_states[:, 2])
+        return torch.exp(-base_height_error / self.config.rewards.reward_tracking_sigma.base_height) * (
+                    1 - self.commands[:, 4])  # only apply the base height penalty if stance
+
+    # added from FALCON Isaac Gym task implementation
+    def _reward_penalty_ee_lin_acc(self):
+        # Penalize the end effector acceleration
+        left_ee_lin_acc = self.simulator._rigid_body_vel[:, self.left_hand_link_index, 0:3] - self.last_left_ee_vel
+        right_ee_lin_acc = self.simulator._rigid_body_vel[:, self.right_hand_link_index, 0:3] - self.last_right_ee_vel
+        end_effector_acc = torch.cat([left_ee_lin_acc.unsqueeze(1), right_ee_lin_acc.unsqueeze(1)], dim=1)
+        end_effector_acc_norm = torch.norm(end_effector_acc, dim=2)
+        return torch.sum(end_effector_acc_norm, dim=1)
+
+    # added from FALCON Isaac Gym task implementation
+    def _reward_penalty_ee_ang_acc(self):
+        # Penalize the end effector angular acceleration
+        left_ee_ang_acc = self.simulator._rigid_body_ang_vel[:, self.left_hand_link_index, 0:3] - self.last_left_ee_ang_vel
+        right_ee_ang_acc = self.simulator._rigid_body_ang_vel[:, self.right_hand_link_index, 0:3] - self.last_right_ee_ang_vel
+        end_effector_ang_acc = torch.cat([left_ee_ang_acc.unsqueeze(1), right_ee_ang_acc.unsqueeze(1)], dim=1)
+        end_effector_ang_acc_norm = torch.norm(end_effector_ang_acc, dim=2)
+        return torch.sum(end_effector_ang_acc_norm, dim=1)
 
     ######################### Observations #########################
     def _get_obs_command_waist_dofs(self):
