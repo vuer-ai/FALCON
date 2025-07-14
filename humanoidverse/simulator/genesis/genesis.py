@@ -13,16 +13,56 @@ from termcolor import colored
 from rich.progress import Progress
 from humanoidverse.simulator.base_simulator.base_simulator import BaseSimulator
 import copy
+import trimesh
+import torch.nn.functional as F
+from scipy.spatial.transform import Rotation as R
+
+import time
+import functools
+
+
+# debugging purposes
+def time_method(func):
+    """Decorator to time any method"""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        end = time.time()
+        print(f"{func.__name__}: {end - start:.4f}s")
+        return result
+
+    return wrapper
+
+
+def time_all_methods(cls):
+    """Class decorator to time all methods"""
+    for attr_name in dir(cls):
+        attr = getattr(cls, attr_name)
+        if callable(attr) and not attr_name.startswith('__'):
+            setattr(cls, attr_name, time_method(attr))
+    return cls
+
+
+def quat_rotate(q, v):
+    # q: (B, L, 4), v: (B, L, 3)
+    qvec = q[..., 1:]
+    uv = torch.cross(qvec, v, dim=-1)
+    uuv = torch.cross(qvec, uv, dim=-1)
+    return v + 2 * (q[..., :1] * uv + uuv)
+
 
 class Genesis(BaseSimulator):
     """
-    Base class for robotic simulation environments, providing a framework for simulation setup, 
+    Base class for robotic simulation environments, providing a framework for simulation setup,
     environment creation, and control over robotic assets and simulation properties.
     """
+
     def __init__(self, config, device):
         """
         Initializes the base simulator with configuration settings and simulation device.
-        
+
         Args:
             config (dict): Configuration dictionary for the simulation.
             device (str): Device type for simulation ('cpu' or 'cuda').
@@ -34,9 +74,168 @@ class Genesis(BaseSimulator):
         self.sim_device = device
         self.headless = False
         gs.init(backend=gs.gpu if 'cuda' in self.device else gs.cpu)
+        self.debug_lines = []
+
+    def _cache_full_jacobian(self):
+        """
+        Build `self.jacobian` with the same shape and semantics that
+        Isaac Gym code expects:  (num_envs , num_bodies , 6 , num_dof)
+        """
+        jac_list = []
+        for name in self.body_names:  # same ordering as cfg
+            link = self.robot.get_link(name)
+            # (num_envs , 6 , num_dof)
+            jac = self.robot.get_jacobian(link)
+            jac_list.append(jac)
+
+        # stack along body axis  ➜  (num_envs , num_bodies , 6 , num_dof)
+        self.jacobian = torch.stack(jac_list, dim=1).to(self.device)
+        # print(f"[Jacobian Cached] Shape: {self.jacobian.shape}  | Expected: (num_envs={self.jacobian.shape[0]}, num_bodies={self.jacobian.shape[1]}, 6, num_dof={self.jacobian.shape[-1]})")
+
+    # @time_method
+    # def apply_rigid_body_force_at_pos_tensor(
+    #         self,
+    #         force_tensor: torch.Tensor,  # (B, L, 3)
+    #         pos_tensor: torch.Tensor,  # (B, L, 3)
+    # ):
+    #     if force_tensor.numel() == 0:
+    #         return
+    #
+    #     # Get rigid solver
+    #     if not hasattr(self, "_rigid_solver"):
+    #         for _solver in self.scene.sim.solvers:
+    #             if isinstance(_solver, RigidSolver):
+    #                 self._rigid_solver = _solver
+    #                 break
+    #
+    #     rigid_solver = self._rigid_solver
+    #
+    #     forces_np = force_tensor.detach().cpu().to(torch.float32).numpy()  # (B,L,3)
+    #     active = np.linalg.norm(forces_np, axis=2) > 1e-8  # (B,L)
+    #
+    #     # links_idx: only the two hand links
+    #     links_idx = np.array([23, 31], dtype=int)
+    #
+    #     # envs_idx: every env that has a non-zero force on *either* hand link
+    #     envs_idx = np.where(np.any(active[:, links_idx], axis=1))[0]  # (E,)
+    #
+    #     if envs_idx.size == 0:
+    #         return  # nothing to apply
+    #
+    #     # Slice out the dense (E,2,3) block; zero rows stay zero automatically
+    #     forces_dense = forces_np[np.ix_(envs_idx, links_idx)]  # (E, 2, 3)
+    #
+    #     # for torque
+    #     link_com_pos = self.robot.get_links_pos()[:, links_idx]
+    #     pos_tensor = pos_tensor[:, links_idx]  # match active links
+    #     pos_tensor_world = pos_tensor.detach().cpu().float()
+    #     lever_arm = pos_tensor_world - link_com_pos[envs_idx].cpu()  # (E, 2, 3)
+    #     torque_tensor = torch.cross(lever_arm, torch.tensor(forces_dense), dim=2)  # (E, 2, 3)
+    #     torque_tensor_np = torque_tensor.numpy()
+    #
+    #     print(self.robot.get_links_pos().shape)
+    #
+    #     rigid_solver.apply_links_external_force(
+    #         force=forces_dense,  # shape (E, 2, 3)
+    #         links_idx=links_idx.tolist(),  # [23, 31]
+    #         envs_idx=envs_idx.tolist(),  # active envs
+    #     )
+    #     rigid_solver.apply_links_external_torque(
+    #         torque=torque_tensor_np,
+    #         links_idx=links_idx.tolist(),
+    #         envs_idx=envs_idx.tolist()
+    #     )
+    #     print('test')
+
+    def apply_rigid_body_force_at_pos_tensor(
+            self,
+            force_tensor: torch.Tensor,  # (B, L, 3)
+            pos_tensor: torch.Tensor  # (B, L, 3)
+    ):
+        if force_tensor.numel() == 0:
+            return
+
+        if not hasattr(self, "_rigid_solver"):
+            for _solver in self.scene.sim.solvers:
+                if isinstance(_solver, RigidSolver):
+                    self._rigid_solver = _solver
+                    break
+
+        rigid_solver = self._rigid_solver
+
+        links_idx = np.array([23, 31], dtype=int)
+
+        # Select hand-related forces/positions
+        force_tensor_sub = force_tensor[:, links_idx]  # (B, 2, 3)
+        pos_tensor_sub = pos_tensor[:, links_idx]  # (B, 2, 3)
+        link_com_pos = self.robot.get_links_pos()[:, links_idx]  # (B, 2, 3)
+
+        # Compute torque = r × F
+        lever_arm = (pos_tensor_sub - link_com_pos).detach().cpu().float()  # (B, 2, 3)
+        forces_np = force_tensor_sub.detach().cpu().float().numpy()
+        torque_tensor = torch.cross(lever_arm, torch.tensor(forces_np), dim=2)  # (B, 2, 3)
+
+        # Zero out all-zero environments (optional for perf)
+        active = torch.norm(force_tensor_sub, dim=2) > 1e-8  # (B, 2)
+        inactive_mask = ~(active.any(dim=1))  # (B,)
+        forces_np[inactive_mask.cpu().numpy()] = 0.0
+
+        # Send to solver
+        rigid_solver.apply_links_external_force(
+            force=forces_np,
+            links_idx=links_idx.tolist(),
+            envs_idx=None  # Apply to all envs
+        )
+        rigid_solver.apply_links_external_torque(
+            torque=torque_tensor.numpy(),
+            links_idx=links_idx.tolist(),
+            envs_idx=None
+        )
+
+    # def apply_rigid_body_force_at_pos_tensor(
+    #     self,
+    #     force_tensor: torch.Tensor,   # (B, L, 3)  world-frame forces
+    #     pos_tensor:  torch.Tensor,    # (B, L, 3)  kept for API parity, unused
+    # ):
+    #     """
+    #     Apply world-frame forces stored in `force_tensor` to the corresponding
+    #     links for each environment.  Forces are injected at each link’s origin
+    #     (ref='link_origin') in world coordinates, matching Genesis semantics.
+    #
+    #     Parameters
+    #     force_tensor : torch.Tensor  [num_envs, num_links, 3]
+    #     pos_tensor   : torch.Tensor  [num_envs, num_links, 3]  (ignored)
+    #     """
+    #
+    #     if force_tensor.numel() == 0:
+    #         return  # nothing to do
+    #
+    #     if not hasattr(self, "_rigid_solver"):
+    #         for _solver in self.scene.sim.solvers:          # type: ignore[attr-defined]
+    #             if isinstance(_solver, RigidSolver):
+    #                 self._rigid_solver = _solver
+    #                 break
+    #         else:
+    #             raise RuntimeError("No RigidSolver found in scene.sim.solvers")
+    #
+    #     rigid_solver: RigidSolver = self._rigid_solver      # alias for brevity
+    #
+    #     forces_np = force_tensor.detach().cpu().to(torch.float32).numpy()  # (B, L, 3)
+    #     B, L, _ = forces_np.shape
+    #
+    #     for env_id in range(B):
+    #         f_env = forces_np[env_id]                             # (L, 3)
+    #         active = np.any(np.abs(f_env) > 1e-8, axis=1)         # mask of non-zero rows
+    #         if not np.any(active):
+    #             continue
+    #
+    #         rigid_solver.apply_links_external_force(
+    #             force=f_env[active][None, :, :],
+    #             links_idx=np.where(active)[0].tolist(),           # global link ids
+    #             envs_idx=[env_id],                                # which environment
+    #         )
 
     # ----- Configuration Setup Methods -----
-
     def set_headless(self, headless):
         """
         Sets the headless mode for the simulator.
@@ -48,12 +247,14 @@ class Genesis(BaseSimulator):
 
     def setup(self):
         """
-        Initializes the simulator parameters and environment. This method should be implemented 
+        Initializes the simulator parameters and environment. This method should be implemented
         by subclasses to set specific simulator configurations.
         """
 
         self.sim_dt = 1 / self.sim_cfg.sim.fps
         self.sim_substeps = self.sim_cfg.sim.substeps
+        # print('gh1: headless', self.headless)
+        vis_options = None if self.headless else gs.options.VisOptions(n_rendered_envs=1)
         # create scene
         self.scene = gs.Scene(
             sim_options=gs.options.SimOptions(
@@ -85,7 +286,7 @@ class Genesis(BaseSimulator):
 
     def setup_terrain(self, mesh_type):
         """
-        Configures the terrain based on specified mesh type. 
+        Configures the terrain based on specified mesh type.
 
         Args:
             mesh_type (str): Type of terrain mesh ('plane', 'heightfield', 'trimesh').
@@ -137,8 +338,9 @@ class Genesis(BaseSimulator):
 
         self.genesis_link_names = [link.name for link in self.robot.links]
         self.humanoidverse_link_names = self.robot_cfg.body_names
-        self.link_mapping_genesis_to_humanoidverse_idx = [self.genesis_link_names.index(name) for name in self.humanoidverse_link_names]
-        
+        self.link_mapping_genesis_to_humanoidverse_idx = [self.genesis_link_names.index(name) for name in
+                                                          self.humanoidverse_link_names]
+
         # names to indices
         self.dof_ids = [
             self.robot.get_joint(name).dof_idx_local
@@ -146,9 +348,9 @@ class Genesis(BaseSimulator):
         ]
 
         self.body_names = self.robot_cfg.body_names
-        self.num_bodies = len(self.body_names)                # = len(self.rigid_solver.links) - 1
+        self.num_bodies = len(self.body_names)  # = len(self.rigid_solver.links) - 1
         self.dof_names = dof_names_list
-        self.num_dof = len(dof_names_list)                    # = len(self.rigid_solver.joints) - 2
+        self.num_dof = len(dof_names_list)  # = len(self.rigid_solver.joints) - 2
 
     # ----- Environment Creation Methods -----
 
@@ -195,12 +397,14 @@ class Genesis(BaseSimulator):
     def get_dof_limits_properties(self):
         """
         Retrieves the DOF (degrees of freedom) limits and properties.
-        
+
         Returns:
             Tuple of tensors representing position limits, velocity limits, and torque limits for each DOF.
         """
-        self.hard_dof_pos_limits = torch.zeros(self.num_dof, 2, dtype=torch.float, device=self.sim_device, requires_grad=False)
-        self.dof_pos_limits = torch.zeros(self.num_dof, 2, dtype=torch.float, device=self.sim_device, requires_grad=False)
+        self.hard_dof_pos_limits = torch.zeros(self.num_dof, 2, dtype=torch.float, device=self.sim_device,
+                                               requires_grad=False)
+        self.dof_pos_limits = torch.zeros(self.num_dof, 2, dtype=torch.float, device=self.sim_device,
+                                          requires_grad=False)
         self.dof_vel_limits = torch.zeros(self.num_dof, dtype=torch.float, device=self.sim_device, requires_grad=False)
         self.torque_limits = torch.zeros(self.num_dof, dtype=torch.float, device=self.sim_device, requires_grad=False)
         for i in range(self.num_dof):
@@ -224,11 +428,11 @@ class Genesis(BaseSimulator):
         Prepares the simulation environment and refreshes any relevant tensors.
         """
         self.scene.step()
-
+        self._cache_full_jacobian()
 
         self.base_pos = self.robot.get_pos()
         base_quat = self.robot.get_quat()
-        self.base_quat = base_quat[..., [1, 2, 3, 0,]]
+        self.base_quat = base_quat[..., [1, 2, 3, 0, ]]
 
         # inv_base_quat = gs_inv_quat(base_quat)
         # self.base_lin_vel = gs_transform_by_quat(self.robot.get_vel(), inv_base_quat)
@@ -262,15 +466,14 @@ class Genesis(BaseSimulator):
             dtype=gs.tc_float,
         )
 
-
-
     def refresh_sim_tensors(self):
         """
         Refreshes the state tensors in the simulation to ensure they are up-to-date.
         """
+        self._cache_full_jacobian()
         self.base_pos = self.robot.get_pos()
         base_quat = self.robot.get_quat()
-        self.base_quat = base_quat[..., [1, 2, 3, 0,]]
+        self.base_quat = base_quat[..., [1, 2, 3, 0, ]]
 
         # inv_base_quat = gs_inv_quat(base_quat)
         # self.base_lin_vel = gs_transform_by_quat(self.robot.get_vel(), inv_base_quat)
@@ -297,7 +500,8 @@ class Genesis(BaseSimulator):
             dtype=gs.tc_float,
         )
         self._rigid_body_pos = self.robot.get_links_pos()[:, self.link_mapping_genesis_to_humanoidverse_idx]
-        self._rigid_body_rot = self.robot.get_links_quat()[:, self.link_mapping_genesis_to_humanoidverse_idx]  # (num_envs, 4) isaacsim uses wxyz, we keep xyzw for consistency
+        self._rigid_body_rot = self.robot.get_links_quat()[:,
+                               self.link_mapping_genesis_to_humanoidverse_idx]  # (num_envs, 4) isaacsim uses wxyz, we keep xyzw for consistency
         self._rigid_body_rot = self._rigid_body_rot[..., [1, 2, 3, 0]]
         self._rigid_body_vel = self.robot.get_links_vel()[:, self.link_mapping_genesis_to_humanoidverse_idx]
         self._rigid_body_ang_vel = self.robot.get_links_ang()[:, self.link_mapping_genesis_to_humanoidverse_idx]
@@ -313,7 +517,6 @@ class Genesis(BaseSimulator):
         """
         self.robot.control_dofs_force(torques, self.dof_ids)
 
-    
     def set_actor_root_state_tensor(self, set_env_ids, root_states):
         """
         Sets the root state tensor for specified actors within environments.
@@ -345,12 +548,12 @@ class Genesis(BaseSimulator):
             base_quat, zero_velocity=False, envs_idx=set_env_ids
         )
         self.robot.set_dofs_velocity(
-            base_lin_vel, dofs_idx_local=[0, 1, 2],  envs_idx=set_env_ids
+            base_lin_vel, dofs_idx_local=[0, 1, 2], envs_idx=set_env_ids
         )
         self.robot.set_dofs_velocity(
-            base_ang_vel, dofs_idx_local=[3, 4, 5],  envs_idx=set_env_ids
+            base_ang_vel, dofs_idx_local=[3, 4, 5], envs_idx=set_env_ids
         )
-    
+
     def set_dof_state_tensor(self, set_env_ids, dof_states):
         """
         Sets the DOF state tensor for specified actors within environments.
@@ -389,34 +592,113 @@ class Genesis(BaseSimulator):
         """
         self.viewer = Viewer()
 
+    # def render(self, sync_frame_time=True):
+    #     """
+    #     Renders the simulation frame-by-frame, syncing frame time if required.
+    #
+    #     Args:
+    #         sync_frame_time (bool): Whether to synchronize the frame time.
+    #     """
+    #     return
+
     def render(self, sync_frame_time=True):
         """
-        Renders the simulation frame-by-frame, syncing frame time if required.
-
-        Args:
-            sync_frame_time (bool): Whether to synchronize the frame time.
+        Advances the simulation by one frame and handles viewer input.
         """
-        return
+        self.scene.step()
 
     @property
     def dof_state(self):
         # This will always use the latest dof_pos and dof_vel
         return torch.cat([self.dof_pos[..., None], self.dof_vel[..., None]], dim=-1)
-    
+
     def add_visualize_entities(self, num_visualize_markers):
         # self.scene.add_entity(gs.morphs.Sphere())
         self.visualize_entities = []
         for i in range(num_visualize_markers):
-            self.visualize_entities.append(self.scene.add_entity(gs.morphs.Sphere(radius=0.04, visualization=True, collision=False)))
-    
-     # debug visualization
+            self.visualize_entities.append(
+                self.scene.add_entity(gs.morphs.Sphere(radius=0.04, visualization=True, collision=False)))
+
+    # debug visualization
+    # def clear_lines(self):
+    # self.scene.clear_debug_objects()
+    # pass
+
+    # def clear_lines(self):
+    #     for line in getattr(self, "debug_lines", []):
+    #         self.scene.remove_entity(line)
+    #     self.debug_lines = []
+
     def clear_lines(self):
-        # self.scene.clear_debug_objects()
-        pass
+        """Clear all debug lines from the scene"""
+        self.scene.clear_debug_objects()
+        self.debug_lines = []
 
     def draw_sphere(self, pos, radius, color, env_id, pos_id=0):
         # self.scene.draw_debug_sphere(pos, radius, color)
         self.visualize_entities[pos_id].set_pos(pos.reshape(1, 3))
 
-    def draw_line(self, start_point, end_point, color, env_id):
-        pass
+    # def draw_line(self, start_point, end_point, color, env_id):
+    #     pass
+
+    def draw_line(self, start_point, end_point, color=(1.0, 0.0, 0.0, 1.0), env_id=0):
+        """
+        Draws a line using Genesis's built-in debug line function.
+        Handles CUDA tensors by converting to CPU first.
+        """
+        # Convert CUDA tensors to CPU floats
+        start = [
+            float(start_point.x.detach().cpu().item()),
+            float(start_point.y.detach().cpu().item()),
+            float(start_point.z.detach().cpu().item()),
+        ]
+        end = [
+            float(end_point.x.detach().cpu().item()),
+            float(end_point.y.detach().cpu().item()),
+            float(end_point.z.detach().cpu().item()),
+        ]
+        color = [color.x, color.y, color.z, 1.0]
+
+        # Compute distance
+        dist = ((start_point.x - end_point.x) ** 2 +
+                (start_point.y - end_point.y) ** 2 +
+                (start_point.z - end_point.z) ** 2).sqrt().item()
+
+        # # If length is less than 0.5, extend to length 0.5
+        # if dist < 0.2:
+        #     # Calculate direction vector
+        #     direction_x = end_point.x - start_point.x
+        #     direction_y = end_point.y - start_point.y
+        #     direction_z = end_point.z - start_point.z
+        #
+        #     # Normalize and scale to 0.5
+        #     if dist > 0:  # Avoid division by zero
+        #         scale = 0.2 / dist
+        #         new_end_x = start_point.x + direction_x * scale
+        #         new_end_y = start_point.y + direction_y * scale
+        #         new_end_z = start_point.z + direction_z * scale
+        #
+        #         end = [
+        #             float(new_end_x.detach().cpu().item()),
+        #             float(new_end_y.detach().cpu().item()),
+        #             float(new_end_z.detach().cpu().item()),
+        #         ]
+        #         dist = 0.5
+
+        # Set radius proportional to line length (or cap it)
+        line_radius = 0.002
+
+        # Draw line
+        debug_line = self.scene.draw_debug_line(
+            start=start,
+            end=end,
+            radius=line_radius,
+            color=color
+        )
+
+        # Store reference for cleanup
+        if not hasattr(self, 'debug_lines'):
+            self.debug_lines = []
+        self.debug_lines.append(debug_line)
+
+        return debug_line

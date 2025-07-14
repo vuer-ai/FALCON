@@ -5,7 +5,9 @@ defaults:
 
 # Env structure
 env:
-  _target_: humanoidverse.envs.decoupled_locomotion.decoupled_locomotion_stand_height_waist_wbc_ma_diff_force.LeggedRobotDecoupledLocomotionStanceHeightWBCForce
+#  _target_: humanoidverse.envs.decoupled_locomotion.decoupled_locomotion_stand_height_waist_wbc_ma_diff_force.LeggedRobotDecoupledLocomotionStanceHeightWBCForce
+#  _target_: humanoidverse.envs.decoupled_locomotion.decoupled_locomotion_stand_height_waist_wbc_ma_genesis.LeggedRobotDecoupledLocomotionStanceHeightWBC
+  _target_: humanoidverse.envs.decoupled_locomotion.decoupled_locomotion_stand_height_waist_wbc_ma_diff_force_genesis.LeggedRobotDecoupledLocomotionStanceHeightWBCForce
   config:
     max_episode_length_s: 20
     locomotion_obs_scales:
@@ -44,14 +46,14 @@ env:
     locomotion_command_resampling_time: 10.0
     obs_history:
       history_len: 0
-    
+
     # Residual upper body action
     residual_upper_body_action: True
 
-    # Force 
+    # Force
     max_force_estimation: True
     update_apply_force_phase: True
-    use_lpf: False
+    use_lpf: True
     force_filter_alpha: 0.05
     zero_tapping_xy_force: False
     zero_force_prob: [0.25, 0.25, 0.25] # 0.2
@@ -62,6 +64,7 @@ env:
     apply_force_pos_ratio_range: [0.0, 1.0]
     lower_body_force_compensation: False
     apply_force_in_physics_step: True
+#    apply_force_in_physics_step: False
     apply_force_compensation_in_physics_step: False
     randomize_force_duration: [150, 250] # The unit is step, where policy runs at 50Hz
     only_apply_z_force_when_walking: False
