@@ -1,5 +1,5 @@
 import numpy as np
-from isaacgym.torch_utils import *
+# from isaacgym.torch_utils import *
 
 import torch
 from isaac_utils.rotations import get_euler_xyz_in_tensor
@@ -9,6 +9,22 @@ from isaac_utils.rotations import quat_apply_yaw, wrap_to_pi
 from humanoidverse.envs.decoupled_locomotion.decoupled_locomotion_stand_ma import LeggedRobotDecoupledLocomotionStance
 
 from loguru import logger
+
+def torch_rand_float(lower, upper, shape, device=None):
+    return (upper - lower) * torch.rand(*shape, device=device) + lower
+
+def quat_rotate_inverse(q, v):
+    # Rotate v by inverse of quaternion q
+    q_conj = q.clone()
+    q_conj[:, 1:] *= -1
+    return quat_apply(q_conj, v)
+
+def quat_apply(q, v):
+    # Applies quaternion rotation: q * [0,v] * q_conj
+    qvec = q[:, 1:]
+    uv = torch.cross(qvec, v, dim=1)
+    uuv = torch.cross(qvec, uv, dim=1)
+    return v + 2 * (q[:, :1] * uv + uuv)
 
 DEBUG = False
 class LeggedRobotDecoupledLocomotionStanceHeightWBC(LeggedRobotDecoupledLocomotionStance):

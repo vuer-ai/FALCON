@@ -1,9 +1,29 @@
-from isaacgym.torch_utils import *
+# from isaacgym.torch_utils import *
 from humanoidverse.utils.torch_utils import (
     generate_sphere_sample_params,
     apply_sphere_sample_to_segments,
     sample_3d_directions,
 )
+
+def quat_rotate(q, v):
+    """
+    Rotate vector(s) v by quaternion(s) q.
+    q: (B, 4) - quaternion in (w, x, y, z) format
+    v: (B, 3) - vector to rotate
+    """
+    qvec = q[:, 1:]
+    uv = torch.cross(qvec, v, dim=1)
+    uuv = torch.cross(qvec, uv, dim=1)
+    return v + 2 * (q[:, :1] * uv + uuv)
+
+
+def quat_rotate_inverse(q, v):
+    """
+    Rotate vector(s) v by the inverse of quaternion(s) q.
+    """
+    q_conj = q.clone()
+    q_conj[:, 1:] *= -1
+    return quat_rotate(q_conj, v)
 
 import torch
 from humanoidverse.envs.decoupled_locomotion.decoupled_locomotion_stand_height_waist_wbc_ma import LeggedRobotDecoupledLocomotionStanceHeightWBC
